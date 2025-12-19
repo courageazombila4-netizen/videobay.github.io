@@ -1,0 +1,164 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VideoBay — Upload & Download</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:24px}
+    .card{max-width:900px;margin:0 auto;padding:20px;border:1px solid #ddd;border-radius:8px}
+    .row{display:flex;gap:12px;align-items:center}
+    input,button,select{padding:8px;font-size:14px}
+    #drop{border:2px dashed #bbb;padding:18px;text-align:center;color:#666}
+    ul{padding-left:20px}
+    .file-item{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #f0f0f0}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>VideoBay</h1>
+    <p>Simple client UI for uploading and downloading media files. Requires a server API at <code>/api</code>.</p>
+
+    <section>
+      <h3>Auth</h3>
+      <div class="row">
+        <input id="username" placeholder="username" />
+        <input id="password" type="password" placeholder="password" />
+        <button id="btnRegister">Register</button>
+        <button id="btnLogin">Login</button>
+        <button id="btnLogout">Logout</button>
+      </div>
+      <p id="authStatus">Not logged in</p>
+    </section>
+
+    <section>
+      <h3>Upload</h3>
+      <div id="drop">Drop files here or use the picker</div>
+      <div style="margin-top:8px" class="row">
+        <input id="fileInput" type="file" multiple accept="video/*,audio/*,application/octet-stream" />
+        <button id="btnUpload">Upload</button>
+      </div>
+      <progress id="progress" value="0" max="100" style="width:100%;display:none;margin-top:8px"></progress>
+      <p id="uploadMsg"></p>
+    </section>
+
+    <section>
+      <h3>Files</h3>
+      <button id="btnRefresh">Refresh list</button>
+      <ul id="filesList"></ul>
+    </section>
+
+    <section style="margin-top:16px;color:#666;font-size:12px">
+      <strong>Note:</strong> This UI expects the backend endpoints:
+      <code>/api/register</code>, <code>/api/login</code>, <code>/api/upload</code>, <code>/api/files</code>, and <code>/api/files/:id/download</code>.
+    </section>
+  </div>
+
+  <script>
+    const apiRoot = '/api';
+    const tokenKey = 'videobay_token';
+
+    const el = id => document.getElementById(id);
+    const username = el('username');
+    const password = el('password');
+    const authStatus = el('authStatus');
+    const btnRegister = el('btnRegister');
+    const btnLogin = el('btnLogin');
+    const btnLogout = el('btnLogout');
+    const fileInput = el('fileInput');
+    const btnUpload = el('btnUpload');
+    const filesList = el('filesList');
+    const btnRefresh = el('btnRefresh');
+    const drop = el('drop');
+    const progress = el('progress');
+    const uploadMsg = el('uploadMsg');
+
+    function getAuthHeader(){
+      const t = localStorage.getItem(tokenKey);
+      return t ? { 'Authorization': 'Bearer '+t } : {};
+    }
+
+    function setStatus(){
+      const t = localStorage.getItem(tokenKey);
+      authStatus.textContent = t ? 'Logged in' : 'Not logged in';
+    }
+
+    async function postJson(path, body){
+      const res = await fetch(apiRoot+path, {method:'POST',headers:{'Content-Type':'application/json', ...getAuthHeader()}, body: JSON.stringify(body)});
+      return res.json();
+    }
+
+    btnRegister.onclick = async ()=>{
+      const res = await postJson('/register',{username:username.value,password:password.value});
+      if(res.token){ localStorage.setItem(tokenKey,res.token); setStatus(); alert('Registered and logged in'); } else alert(JSON.stringify(res));
+    };
+
+    btnLogin.onclick = async ()=>{
+      const res = await postJson('/login',{username:username.value,password:password.value});
+      if(res.token){ localStorage.setItem(tokenKey,res.token); setStatus(); alert('Logged in'); } else alert(JSON.stringify(res));
+    };
+
+    btnLogout.onclick = ()=>{ localStorage.removeItem(tokenKey); setStatus(); };
+
+    async function uploadFiles(files){
+      if(!files || files.length===0) return;
+      const form = new FormData();
+      for(const f of files) form.append('files', f);
+      progress.style.display = 'block';
+      uploadMsg.textContent = '';
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', apiRoot+'/upload');
+      const token = localStorage.getItem(tokenKey);
+      if(token) xhr.setRequestHeader('Authorization', 'Bearer '+token);
+      xhr.upload.onprogress = e => {
+        if(e.lengthComputable) progress.value = (e.loaded/e.total)*100;
+      };
+      xhr.onload = ()=>{
+        progress.style.display = 'none';
+        try{ const data = JSON.parse(xhr.responseText); uploadMsg.textContent = data.message||'Done'; fetchFiles(); }
+        catch(e){ uploadMsg.textContent = 'Upload finished'; fetchFiles(); }
+      };
+      xhr.onerror = ()=>{ progress.style.display='none'; uploadMsg.textContent='Upload error'; };
+      xhr.send(form);
+    }
+
+    btnUpload.onclick = ()=> uploadFiles(fileInput.files);
+
+    // drag/drop
+    drop.addEventListener('dragover', e=>{ e.preventDefault(); drop.style.borderColor='#666'; });
+    drop.addEventListener('dragleave', e=>{ drop.style.borderColor='#bbb'; });
+    drop.addEventListener('drop', e=>{ e.preventDefault(); drop.style.borderColor='#bbb'; const dt = e.dataTransfer; if(dt.files) uploadFiles(dt.files); });
+
+    async function fetchFiles(){
+      filesList.innerHTML = 'Loading...';
+      try{
+        const res = await fetch(apiRoot+'/files', {headers: getAuthHeader()});
+        if(!res.ok) throw new Error('Fetch failed');
+        const list = await res.json();
+        filesList.innerHTML = '';
+        if(!Array.isArray(list) || list.length===0){ filesList.innerHTML = '<li>No files</li>'; return; }
+        for(const f of list){
+          const li = document.createElement('li'); li.className='file-item';
+          const name = document.createElement('span'); name.textContent = f.originalName || f.name || f.filename || f.title || 'file';
+          const actions = document.createElement('span');
+          const dl = document.createElement('a'); dl.textContent='Download'; dl.href = apiRoot+`/files/${encodeURIComponent(f.id||f._id||f.filename)}/download`;
+          dl.style.marginRight='8px';
+          const del = document.createElement('button'); del.textContent='Delete'; del.onclick = async ()=>{
+            const r = await fetch(apiRoot+`/files/${encodeURIComponent(f.id||f._id||f.filename)}`, {method:'DELETE', headers: getAuthHeader()});
+            if(r.ok) fetchFiles(); else alert('Delete failed');
+          };
+          actions.appendChild(dl); actions.appendChild(del);
+          li.appendChild(name); li.appendChild(actions); filesList.appendChild(li);
+        }
+      }catch(e){ filesList.innerHTML = '<li>Error loading files</li>'; }
+    }
+
+    btnRefresh.onclick = fetchFiles;
+
+    // init
+    setStatus(); fetchFiles();
+  </script>
+</body>
+</html>
